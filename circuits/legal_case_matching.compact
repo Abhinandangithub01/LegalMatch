@@ -1,0 +1,338 @@
+pragma language_version 0.15;
+import CompactStandardLibrary;
+
+// Legal Case Matching Contract with Zero-Knowledge Privacy
+contract LegalCaseMatching {
+  
+  // Public state - no personal case details stored
+  state {
+    total_active_cases: u32;
+    total_matched_attorneys: u32;
+    case_categories: Map<LegalSpecialization, u16>;
+    jurisdiction_activity: Map<JurisdictionID, u16>;
+    compatibility_scores: Map<Hash, u8>; // Anonymous compatibility tracking
+    case_urgency_stats: Map<UrgencyLevel, u16>;
+  }
+  
+  // Types for legal case matching
+  type LegalSpecialization = u8; // 1=corporate, 2=criminal, 3=family, 4=personal_injury, etc.
+  type JurisdictionID = u8; // 1=CA, 2=NY, 3=TX, etc.
+  type UrgencyLevel = u8; // 1=low, 2=medium, 3=high, 4=emergency
+  type CaseComplexity = u8; // 1=simple, 2=moderate, 3=complex, 4=highly_complex
+  
+  struct CaseRequirements {
+    specialization: LegalSpecialization;
+    min_years_experience: u8;
+    jurisdiction: JurisdictionID;
+    complexity_level: CaseComplexity;
+    urgency: UrgencyLevel;
+    budget_range: u8; // 1=low, 2=medium, 3=high, 4=premium
+    case_duration_estimate: u8; // Months
+    requires_trial_experience: Boolean;
+  }
+  
+  struct AttorneyProfile {
+    specializations: [LegalSpecialization; 5];
+    years_experience: u8;
+    jurisdictions: [JurisdictionID; 10];
+    max_case_complexity: CaseComplexity;
+    availability_level: u8; // 1=limited, 2=moderate, 3=high
+    fee_range: u8; // 1=low, 2=medium, 3=high, 4=premium
+    trial_experience: Boolean;
+    current_caseload: u8;
+  }
+  
+  // Circuit to calculate case-attorney compatibility without revealing details
+  circuit calculate_case_compatibility(
+    // Private inputs
+    case_details: CaseRequirements,          // Private case requirements
+    attorney_profile: AttorneyProfile,       // Private attorney profile
+    case_sensitive_info_hash: Hash,          // Hash of sensitive case information
+    attorney_identity_secret: Field,         // Attorney's anonymous identity
+    case_identity_secret: Field,             // Case's anonymous identity
+    attorney_salt: Field,                    // Privacy salt for attorney
+    case_salt: Field,                        // Privacy salt for case
+    
+    // Public inputs
+    compatibility_threshold: u8,             // Minimum compatibility score (0-100)
+    current_epoch: u64,                      // Timestamp for freshness
+    matching_session_id: Hash                // Session identifier
+  ) -> u8 {
+    
+    // Generate anonymous identities
+    let attorney_commitment = poseidon_hash([attorney_identity_secret, attorney_salt]);
+    let case_commitment = poseidon_hash([case_identity_secret, case_salt]);
+    
+    // Verify specialization match
+    let specialization_score = calculate_specialization_match(
+      case_details.specialization,
+      attorney_profile.specializations
+    );
+    assert(specialization_score > 0); // Must have some specialization match
+    
+    // Verify experience requirements
+    assert(attorney_profile.years_experience >= case_details.min_years_experience);
+    let experience_score = calculate_experience_score(
+      attorney_profile.years_experience,
+      case_details.min_years_experience
+    );
+    
+    // Verify jurisdiction match
+    let jurisdiction_score = calculate_jurisdiction_match(
+      case_details.jurisdiction,
+      attorney_profile.jurisdictions
+    );
+    assert(jurisdiction_score > 0); // Must be licensed in required jurisdiction
+    
+    // Calculate complexity compatibility
+    let complexity_score = calculate_complexity_compatibility(
+      case_details.complexity_level,
+      attorney_profile.max_case_complexity
+    );
+    assert(complexity_score > 0); // Attorney must handle case complexity
+    
+    // Calculate availability compatibility
+    let availability_score = calculate_availability_compatibility(
+      case_details.urgency,
+      attorney_profile.availability_level,
+      attorney_profile.current_caseload
+    );
+    
+    // Calculate budget compatibility
+    let budget_score = calculate_budget_compatibility(
+      case_details.budget_range,
+      attorney_profile.fee_range
+    );
+    
+    // Verify trial experience if required
+    if (case_details.requires_trial_experience) {
+      assert(attorney_profile.trial_experience);
+    }
+    let trial_score = if case_details.requires_trial_experience && attorney_profile.trial_experience { 100 } else { 80 };
+    
+    // Calculate weighted compatibility score
+    let total_score = (
+      specialization_score * 25 +
+      experience_score * 20 +
+      jurisdiction_score * 15 +
+      complexity_score * 15 +
+      availability_score * 10 +
+      budget_score * 10 +
+      trial_score * 5
+    ) / 100;
+    
+    // Only proceed if above threshold
+    assert(total_score >= compatibility_threshold);
+    
+    // Create anonymous compatibility record
+    let compatibility_hash = poseidon_hash([
+      attorney_commitment,
+      case_commitment,
+      matching_session_id
+    ]);
+    compatibility_scores[compatibility_hash] = total_score;
+    
+    // Update statistics without revealing details
+    case_categories[case_details.specialization] += 1;
+    jurisdiction_activity[case_details.jurisdiction] += 1;
+    case_urgency_stats[case_details.urgency] += 1;
+    
+    total_matched_attorneys += 1;
+    
+    return total_score;
+  }
+  
+  // Circuit for anonymous case posting without revealing sensitive details
+  circuit post_anonymous_case(
+    // Private inputs
+    case_description_hash: Hash,             // Hash of case description
+    client_identity_secret: Field,           // Client's anonymous identity
+    case_requirements: CaseRequirements,     // Case requirements
+    sensitive_details_hash: Hash,            // Hash of sensitive case details
+    client_salt: Field,                      // Privacy salt
+    
+    // Public inputs
+    case_category: LegalSpecialization,      // General case category
+    urgency_level: UrgencyLevel,             // Case urgency
+    jurisdiction: JurisdictionID,            // Required jurisdiction
+    current_epoch: u64                       // Timestamp
+  ) -> Hash {
+    
+    // Generate client anonymous identity
+    let client_commitment = poseidon_hash([client_identity_secret, client_salt]);
+    
+    // Verify case requirements match public parameters
+    assert(case_requirements.specialization == case_category);
+    assert(case_requirements.urgency == urgency_level);
+    assert(case_requirements.jurisdiction == jurisdiction);
+    
+    // Generate unique case identifier
+    let case_id = poseidon_hash([
+      case_description_hash,
+      client_commitment,
+      current_epoch
+    ]);
+    
+    // Verify timestamp is recent
+    let current_time = get_current_timestamp();
+    assert(current_epoch >= current_time - 1800); // Within 30 minutes
+    assert(current_epoch <= current_time + 300);  // Not more than 5 min future
+    
+    // Update public statistics
+    total_active_cases += 1;
+    case_categories[case_category] += 1;
+    jurisdiction_activity[jurisdiction] += 1;
+    case_urgency_stats[urgency_level] += 1;
+    
+    return case_id;
+  }
+  
+  // Circuit for verifying attorney availability without revealing schedule
+  circuit verify_attorney_availability(
+    // Private inputs
+    attorney_identity_secret: Field,         // Attorney's identity secret
+    attorney_salt: Field,                    // Privacy salt
+    current_schedule_hash: Hash,             // Hash of current schedule
+    capacity_details_hash: Hash,             // Hash of capacity details
+    
+    // Public inputs
+    requested_hours_per_week: u8,            // Hours needed for case
+    case_duration_months: u8,                // Expected case duration
+    start_date_flexibility: u8,              // Days of flexibility for start
+    current_epoch: u64
+  ) -> Boolean {
+    
+    // Generate attorney anonymous identity
+    let attorney_commitment = poseidon_hash([attorney_identity_secret, attorney_salt]);
+    
+    // Verify availability constraints (simplified - real implementation would use more sophisticated scheduling)
+    assert(requested_hours_per_week >= 1 && requested_hours_per_week <= 60);
+    assert(case_duration_months >= 1 && case_duration_months <= 60);
+    assert(start_date_flexibility <= 90); // Max 90 days flexibility
+    
+    // Create availability commitment
+    let availability_commitment = poseidon_hash([
+      current_schedule_hash,
+      capacity_details_hash,
+      attorney_commitment,
+      current_epoch
+    ]);
+    
+    // Verify timestamp freshness
+    let current_time = get_current_timestamp();
+    assert(current_epoch >= current_time - 3600); // Within 1 hour
+    assert(current_epoch <= current_time);
+    
+    return true;
+  }
+  
+  // Helper functions for compatibility calculations
+  function calculate_specialization_match(
+    required_spec: LegalSpecialization,
+    attorney_specs: [LegalSpecialization; 5]
+  ) -> u8 {
+    for i in 0..5 {
+      if attorney_specs[i] == required_spec {
+        return 100; // Perfect match
+      }
+    }
+    return 0; // No match
+  }
+  
+  function calculate_experience_score(attorney_years: u8, min_required: u8) -> u8 {
+    if attorney_years >= min_required + 10 {
+      return 100; // Highly experienced
+    } else if attorney_years >= min_required + 5 {
+      return 90;  // Very experienced
+    } else if attorney_years >= min_required + 2 {
+      return 80;  // Adequately experienced
+    } else if attorney_years >= min_required {
+      return 70;  // Meets minimum
+    } else {
+      return 0;   // Insufficient experience
+    }
+  }
+  
+  function calculate_jurisdiction_match(
+    required_jurisdiction: JurisdictionID,
+    attorney_jurisdictions: [JurisdictionID; 10]
+  ) -> u8 {
+    for i in 0..10 {
+      if attorney_jurisdictions[i] == required_jurisdiction {
+        return 100; // Licensed in required jurisdiction
+      }
+    }
+    return 0; // Not licensed
+  }
+  
+  function calculate_complexity_compatibility(
+    case_complexity: CaseComplexity,
+    attorney_max_complexity: CaseComplexity
+  ) -> u8 {
+    if attorney_max_complexity >= case_complexity {
+      let diff = attorney_max_complexity - case_complexity;
+      return if diff == 0 { 100 } else if diff == 1 { 90 } else { 80 };
+    } else {
+      return 0; // Cannot handle complexity
+    }
+  }
+  
+  function calculate_availability_compatibility(
+    case_urgency: UrgencyLevel,
+    attorney_availability: u8,
+    current_caseload: u8
+  ) -> u8 {
+    // Higher urgency requires higher availability
+    let urgency_requirement = case_urgency * 25; // 25, 50, 75, 100
+    let availability_score = attorney_availability * 33; // 33, 66, 99
+    
+    // Adjust for current caseload
+    let caseload_penalty = current_caseload * 5; // 5 points per case
+    let adjusted_availability = if availability_score > caseload_penalty {
+      availability_score - caseload_penalty
+    } else {
+      0
+    };
+    
+    return if adjusted_availability >= urgency_requirement {
+      adjusted_availability
+    } else {
+      0
+    };
+  }
+  
+  function calculate_budget_compatibility(case_budget: u8, attorney_fees: u8) -> u8 {
+    if case_budget >= attorney_fees {
+      return 100; // Budget covers fees
+    } else if case_budget + 1 >= attorney_fees {
+      return 75;  // Close match
+    } else {
+      return 0;   // Budget insufficient
+    }
+  }
+  
+  // Public functions for statistics
+  function get_category_stats(category: LegalSpecialization) -> u16 {
+    if case_categories.contains_key(category) {
+      return case_categories[category];
+    } else {
+      return 0;
+    }
+  }
+  
+  function get_jurisdiction_activity(jurisdiction: JurisdictionID) -> u16 {
+    if jurisdiction_activity.contains_key(jurisdiction) {
+      return jurisdiction_activity[jurisdiction];
+    } else {
+      return 0;
+    }
+  }
+  
+  function get_platform_stats() -> (u32, u32) {
+    return (total_active_cases, total_matched_attorneys);
+  }
+  
+  function get_current_timestamp() -> u64 {
+    return block_timestamp();
+  }
+}

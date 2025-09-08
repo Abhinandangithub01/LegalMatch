@@ -1,0 +1,40 @@
+// Minimal Membership Circuit for Privacy First Challenge
+// Proves eligibility to join support group without revealing identity
+
+circuit MinimalMembership {
+    // Private inputs
+    private field identity_secret;     // User's secret identity
+    private field condition_type;      // Mental health condition (1=anxiety, 2=depression, 3=general)
+    private field group_secret;        // Secret for specific group
+    
+    // Public inputs
+    public field group_id;             // Public group identifier
+    public field membership_proof;     // Proof of valid membership
+    public field nullifier;           // Prevents double-joining
+    
+    // Constants for condition types
+    const field ANXIETY_TYPE = 1;
+    const field DEPRESSION_TYPE = 2;
+    const field GENERAL_TYPE = 3;
+    
+    // Circuit logic
+    fn main() {
+        // Verify condition type is valid
+        let valid_condition = (condition_type == ANXIETY_TYPE) || 
+                             (condition_type == DEPRESSION_TYPE) || 
+                             (condition_type == GENERAL_TYPE);
+        assert(valid_condition);
+        
+        // Generate membership proof based on identity and group
+        let computed_membership_proof = poseidon_hash([identity_secret, group_id, condition_type]);
+        assert_eq(membership_proof, computed_membership_proof);
+        
+        // Generate nullifier to prevent joining same group twice
+        let computed_nullifier = poseidon_hash([identity_secret, group_id]);
+        assert_eq(nullifier, computed_nullifier);
+        
+        // Verify group secret matches (simplified group validation)
+        let expected_group_secret = poseidon_hash([group_id]);
+        assert_eq(group_secret, expected_group_secret);
+    }
+}

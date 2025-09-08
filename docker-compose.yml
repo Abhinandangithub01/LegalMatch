@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  # Midnight Proof Server - Generates ZK proofs
+  proof-server:
+    image: midnightnetwork/proof-server:latest
+    container_name: midnight-proof-server
+    ports:
+      - "8080:8080"
+    environment:
+      - PROOF_SERVER_PORT=8080
+      - LOG_LEVEL=info
+    volumes:
+      - ./circuits:/circuits
+      - proof-data:/data
+    networks:
+      - midnight-network
+
+  # Midnight Node - Local blockchain node
+  midnight-node:
+    image: midnightnetwork/midnight-node:latest
+    container_name: midnight-node
+    ports:
+      - "1337:1337"  # RPC port
+      - "1338:1338"  # P2P port
+    environment:
+      - NODE_ENV=development
+      - RPC_PORT=1337
+      - P2P_PORT=1338
+    volumes:
+      - node-data:/data
+      - ./config:/config
+    networks:
+      - midnight-network
+
+  # PubSub Indexer - Indexes blockchain events
+  indexer:
+    image: midnightnetwork/midnight-pubsub-indexer:latest
+    container_name: midnight-indexer
+    ports:
+      - "3001:3001"
+    environment:
+      - INDEXER_PORT=3001
+      - NODE_RPC_URL=http://midnight-node:1337
+    networks:
+      - midnight-network
+    depends_on:
+      - midnight-node
+
+  # Compact Compiler - Compiles .compact circuits
+  compactc:
+    image: midnightnetwork/compactc:latest
+    container_name: midnight-compactc
+    volumes:
+      - ./circuits:/circuits
+      - ./compiled:/compiled
+    working_dir: /circuits
+    networks:
+      - midnight-network
+    profiles:
+      - tools
+
+volumes:
+  proof-data:
+  node-data:
+
+networks:
+  midnight-network:
+    driver: bridge

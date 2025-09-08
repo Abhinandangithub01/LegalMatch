@@ -1,0 +1,172 @@
+// Economic Bonding Circuit - Mental Health Support Platform
+// Implements staking and slashing for group participation
+// Based on SelectConnect's economic bonds architecture
+
+circuit EconomicBonding {
+    // Private inputs
+    private field userSecret;        // User's identity secret
+    private field bondAmount;        // Amount of tokens bonded
+    private field behaviorScore;     // User's behavior/reputation score
+    
+    // Public inputs
+    public field groupId;           // Target group ID
+    public field minimumBond;       // Minimum required bond for group
+    public field slashingThreshold; // Score below which bond gets slashed
+    public field bondDuration;      // How long bond is locked (in epochs)
+    
+    // Outputs
+    public field bondCommitment;    // Commitment to the bond
+    public field eligibilityProof;  // Proof user is eligible to join
+    public field riskScore;         // Anonymous risk assessment
+    
+    constraint {
+        // Verify user has sufficient bond
+        bondAmount >= minimumBond;
+        
+        // Generate bond commitment
+        bondCommitment == hash(userSecret, bondAmount, groupId, bondDuration);
+        
+        // Generate eligibility proof without revealing identity
+        eligibilityProof == hash(userSecret, groupId, behaviorScore);
+        
+        // Calculate anonymous risk score
+        // Lower score = higher risk = higher bond requirement
+        riskScore == (behaviorScore * 100) / (behaviorScore + 50);
+        
+        // Ensure behavior score is reasonable
+        behaviorScore >= 0;
+        behaviorScore <= 1000; // Max reputation score
+        
+        // Validate bond parameters
+        minimumBond >= 1;      // At least 1 token
+        minimumBond <= 10000;  // Max 10,000 tokens
+        
+        // Validate slashing threshold
+        slashingThreshold >= 1;
+        slashingThreshold <= 100;
+        
+        // Validate bond duration (1 hour to 30 days)
+        bondDuration >= 1;     // Minimum 1 epoch (1 hour)
+        bondDuration <= 720;   // Maximum 720 epochs (30 days)
+        
+        // Anti-sybil: Higher bond required for lower behavior scores
+        field requiredBond = minimumBond + (100 - behaviorScore) * 10;
+        bondAmount >= requiredBond;
+        
+        // Ensure non-zero critical inputs
+        userSecret != 0;
+        bondAmount != 0;
+        groupId != 0;
+    }
+}
+
+// Harassment Report Circuit - For anonymous reporting with ZK proofs
+circuit HarassmentReport {
+    // Private inputs
+    private field reporterSecret;    // Reporter's secret identity
+    private field evidenceHash;      // Hash of evidence/screenshots
+    private field witnessSecrets[3]; // Up to 3 witness secrets
+    
+    // Public inputs
+    public field targetNullifier;    // Harasser's nullifier in group
+    public field groupId;            // Group where harassment occurred
+    public field reportType;         // 1=Spam, 2=Harassment, 3=Abuse
+    public field severityLevel;      // 1=Minor, 2=Major, 3=Severe
+    public field reportCommitment;   // Commitment to report details
+    public field witnessCount;       // Number of witnesses (0-3)
+    
+    constraint {
+        // Validate report type
+        reportType >= 1;
+        reportType <= 3;
+        
+        // Validate severity
+        severityLevel >= 1;
+        severityLevel <= 3;
+        
+        // Validate witness count
+        witnessCount >= 0;
+        witnessCount <= 3;
+        
+        // Create report commitment
+        reportCommitment == hash(reporterSecret, evidenceHash, targetNullifier, groupId);
+        
+        // Ensure reporter is different from target
+        hash(reporterSecret, groupId) != targetNullifier;
+        
+        // Verify witnesses if present
+        if (witnessCount > 0) {
+            hash(witnessSecrets[0], groupId) != targetNullifier;
+        }
+        if (witnessCount > 1) {
+            hash(witnessSecrets[1], groupId) != targetNullifier;
+        }
+        if (witnessCount > 2) {
+            hash(witnessSecrets[2], groupId) != targetNullifier;
+        }
+    }
+}
+
+// Bond Slashing Circuit - For processing verified harassment reports
+circuit BondSlashing {
+    // Private inputs
+    private field moderatorSecret;   // Moderator's secret key
+    private field reportEvidence;    // Evidence hash from investigation
+    
+    // Public inputs
+    public field targetNullifier;    // Harasser's nullifier
+    public field groupId;            // Group ID
+    public field slashAmount;        // Amount to slash from bond
+    public field reportId;           // ID of verified report
+    public field moderatorCommitment; // Moderator's commitment
+    
+    constraint {
+        // Verify moderator commitment
+        moderatorCommitment == hash(moderatorSecret, groupId);
+        
+        // Slash amount must be reasonable (10-100% of bond)
+        slashAmount >= 100;  // Minimum 100 tokens
+        slashAmount <= 10000; // Maximum 10000 tokens
+        
+        // Link to specific report
+        reportId > 0;
+        
+        // Evidence must be provided
+        reportEvidence != 0;
+    }
+}
+
+// Reputation Circuit - For building anonymous reputation scores
+circuit ReputationUpdate {
+    // Private inputs
+    private field userSecret;        // User's secret identity
+    private field actionType;        // 1=HelpfulMessage, 2=SupportGiven, 3=GroupParticipation
+    private field actionValue;       // Quantified value of action
+    
+    // Public inputs
+    public field groupId;            // Group where action occurred
+    public field nullifier;          // User's anonymous identifier
+    public field reputationDelta;    // Change in reputation (+/-)
+    public field timeEpoch;          // When action occurred
+    
+    constraint {
+        // Generate consistent nullifier
+        nullifier == hash(userSecret, groupId);
+        
+        // Validate action types
+        actionType >= 1;
+        actionType <= 3;
+        
+        // Reputation changes must be reasonable
+        reputationDelta >= -100; // Max penalty: -100
+        reputationDelta <= 100;  // Max reward: +100
+        
+        // Action value must be positive
+        actionValue > 0;
+        actionValue <= 1000;
+        
+        // Time must be recent
+        timeEpoch >= getCurrentTime() - 86400; // Within 24 hours
+        timeEpoch <= getCurrentTime();
+    }
+}

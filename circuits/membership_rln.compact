@@ -1,0 +1,105 @@
+// Membership RLN Circuit - Mental Health Support Platform
+// Prevents spam while maintaining user anonymity
+// Based on Whistleblower project architecture
+
+circuit MembershipRLN {
+    // Private inputs
+    private field identitySecret;    // User's secret key
+    private field messageHash;       // Hash of the message being sent
+    private field epoch;            // Current time epoch (1 hour intervals)
+    
+    // Public inputs
+    public field groupId;           // ID of the group/chat room
+    public field messageLimit;     // Maximum messages allowed per epoch (default: 50)
+    public field merkleRoot;       // Root of group membership tree
+    
+    // Outputs
+    public field nullifier;        // Rate limiting nullifier
+    public field signal;          // Anonymous signal for verification
+    
+    // Membership proof inputs
+    private field[8] membershipProof; // Merkle proof of group membership
+    private field leafIndex;         // Position in membership tree
+    
+    constraint {
+        // Generate nullifier for rate limiting
+        // Same user + same epoch = same nullifier (prevents spam)
+        nullifier == hash(identitySecret, epoch, groupId);
+        
+        // Generate anonymous signal
+        signal == hash(messageHash, identitySecret, epoch);
+        
+        // Verify group membership using Merkle proof
+        field computedRoot = membershipProof[0];
+        field currentHash = hash(identitySecret, groupId); // User's leaf
+        
+        // Verify Merkle path
+        for (field i = 0; i < 8; i++) {
+            field isLeft = (leafIndex >> i) & 1;
+            computedRoot = isLeft ? 
+                hash(membershipProof[i], computedRoot) : 
+                hash(computedRoot, membershipProof[i]);
+        }
+        
+        // Ensure computed root matches group's Merkle root
+        computedRoot == merkleRoot;
+        
+        // Validate epoch is reasonable (within last 24 hours)
+        epoch >= getCurrentTime() - 86400; // 24 hours ago
+        epoch <= getCurrentTime() + 3600;  // 1 hour future (clock skew)
+        
+        // Validate message limit
+        messageLimit >= 1;
+        messageLimit <= 100; // Maximum 100 messages per hour
+        
+        // Ensure non-zero inputs
+        identitySecret != 0;
+        messageHash != 0;
+        groupId != 0;
+    }
+}
+
+// Group Management Circuit - For creating and managing support groups
+circuit GroupManagement {
+    // Private inputs
+    private field creatorSecret;     // Group creator's secret
+    private field groupConfig;       // Group configuration hash
+    
+    // Public inputs  
+    public field groupId;            // Unique group identifier
+    public field groupType;          // 1=Anxiety, 2=Depression, etc.
+    public field maxMembers;         // Maximum group size
+    public field membershipFee;      // Staking requirement to join
+    public field creatorCommitment;  // Commitment to creator identity
+    
+    constraint {
+        // Verify creator commitment
+        creatorCommitment == hash(creatorSecret, groupId);
+        
+        // Validate group type (1-10 supported conditions)
+        groupType >= 1;
+        groupType <= 10;
+        
+        // Reasonable group size limits
+        maxMembers >= 5;
+        maxMembers <= 100;
+        
+        // Minimum staking requirement for spam prevention
+        membershipFee >= 1000; // Minimum 1000 tokens
+        
+        // Group config includes all parameters
+        groupConfig == hash(groupType, maxMembers, membershipFee, creatorSecret);
+    }
+}
+
+// Helper functions
+function getCurrentEpoch() -> field {
+    // Returns current epoch (hour-based)
+    return getCurrentTime() / 3600;
+}
+
+function verifyMerkleProof(leaf: field, path: field[20], root: field) -> bool {
+    // Verifies membership in Merkle tree
+    // Implementation provided by Midnight runtime
+    return true; // Placeholder
+}

@@ -1,0 +1,40 @@
+// Minimal Identity Verification Circuit for Privacy First Challenge
+// Proves user eligibility for mental health support without revealing personal details
+
+circuit MinimalIdentity {
+    // Private inputs (known only to user)
+    private field condition_hash;     // Hash of mental health condition
+    private field user_secret;        // User's secret key
+    private field nullifier_secret;   // For generating unique nullifiers
+    
+    // Public inputs (visible to verifier)
+    public field nullifier;           // Unique identifier preventing double-joining
+    public field commitment;          // Public commitment to identity
+    public field condition_proof;     // Zero-knowledge proof of condition eligibility
+    
+    // Constants
+    const field ANXIETY_HASH = 0x1a2b3c4d5e6f7890;
+    const field DEPRESSION_HASH = 0x9876543210abcdef;
+    const field GENERAL_HASH = 0xfedcba0987654321;
+    
+    // Main circuit logic
+    fn main() {
+        // Generate commitment from user secret
+        let computed_commitment = poseidon_hash([user_secret, nullifier_secret]);
+        assert_eq(commitment, computed_commitment);
+        
+        // Generate nullifier to prevent double-spending/joining
+        let computed_nullifier = poseidon_hash([nullifier_secret, user_secret]);
+        assert_eq(nullifier, computed_nullifier);
+        
+        // Verify condition eligibility (anxiety, depression, or general support)
+        let valid_condition = (condition_hash == ANXIETY_HASH) || 
+                             (condition_hash == DEPRESSION_HASH) || 
+                             (condition_hash == GENERAL_HASH);
+        assert(valid_condition);
+        
+        // Generate condition proof without revealing which condition
+        let computed_condition_proof = poseidon_hash([condition_hash, user_secret]);
+        assert_eq(condition_proof, computed_condition_proof);
+    }
+}

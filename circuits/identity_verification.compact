@@ -1,0 +1,50 @@
+// Identity Verification Circuit - Mental Health Support Platform
+// Proves identity and mental health condition without revealing personal details
+// Based on VerifiedVoices architecture with SHA-256 transformation
+
+circuit IdentityVerification {
+    // Private inputs - user's sensitive data
+    private field name;
+    private field organization;
+    private field idNumber;
+    private field mentalHealthCondition;
+    private field salt;
+    
+    // Public inputs - categorical data for matching
+    public field organizationType; // 1=Academic, 2=Corporate, 3=Government, 4=Healthcare
+    public field roleType;         // 1=Student, 2=Employee, 3=Official, 4=Patient
+    public field conditionCategory; // 1=Anxiety, 2=Depression, 3=Bipolar, 4=PTSD, 5=Other
+    public field severityLevel;    // 1=Mild, 2=Moderate, 3=Severe
+    
+    // Outputs - anonymous identifiers
+    public field nullifier;
+    public field commitment;
+    
+    // Constraints to ensure valid inputs and generate proofs
+    constraint {
+        // Validate categorical inputs are in valid ranges
+        organizationType >= 1 && organizationType <= 4;
+        roleType >= 1 && roleType <= 4;
+        conditionCategory >= 1 && conditionCategory <= 5;
+        severityLevel >= 1 && severityLevel <= 3;
+        
+        // Generate nullifier from private data
+        nullifier == hash(name, idNumber, salt);
+        
+        // Generate commitment for group membership
+        commitment == hash(nullifier, organization, mentalHealthCondition);
+        
+        // Ensure private inputs are not zero (basic validation)
+        name != 0;
+        organization != 0;
+        idNumber != 0;
+        mentalHealthCondition != 0;
+        salt != 0;
+    }
+}
+
+// Helper function to get current time (implemented in circuit runtime)
+function getCurrentTime() -> field {
+    // Returns current Unix timestamp
+    // Implementation provided by Midnight runtime
+}

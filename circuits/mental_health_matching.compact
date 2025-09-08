@@ -1,0 +1,280 @@
+pragma language_version 0.15;
+import CompactStandardLibrary;
+
+// Mental Health Support Contract with Zero-Knowledge Privacy
+contract MentalHealthSupport {
+  
+  // Public state - no personal information stored
+  state {
+    total_verified_members: u32;
+    active_support_groups: u16;
+    anonymous_commitments: Set<Hash>;
+    group_memberships: Map<GroupID, Set<CommittedIdentity>>;
+    group_stats: Map<GroupID, GroupStats>;
+  }
+  
+  // Types for mental health support
+  type GroupID = Hash;
+  type CommittedIdentity = Hash;
+  type ConditionCategory = u8; // 1=anxiety, 2=depression, 3=trauma, 4=addiction, 5=other
+  
+  struct GroupStats {
+    member_count: u16;
+    avg_compatibility_score: u8;
+    activity_level: u8;
+    creation_timestamp: u64;
+  }
+  
+  struct CompatibilityVector {
+    interaction_style: u8;      // 1=listening, 2=sharing, 3=both
+    session_frequency: u8;      // 1=weekly, 2=biweekly, 3=monthly
+    group_size_pref: u8;        // 1=small(3-5), 2=medium(6-10), 3=large(10+)
+    time_flexibility: u8;       // Hours of timezone flexibility
+    experience_level: u8;       // 1=new, 2=experienced, 3=mentor
+  }
+  
+  // Circuit to verify condition eligibility without revealing condition details
+  circuit verify_condition_eligibility(
+    // Private inputs - never revealed on blockchain
+    medical_condition_hash: Hash,        // SHA256(condition_type + severity + salt)
+    severity_level: u8,                  // 1-5 scale (private)
+    treatment_duration_months: u16,      // How long in treatment
+    professional_verification: Hash,     // Optional: therapist signature hash
+    user_identity_secret: Field,         // User's anonymous identity seed
+    user_salt: Field,                    // Random salt for privacy
+    
+    // Public inputs - visible to verifiers
+    min_treatment_duration: u16,         // Minimum months required for group
+    support_group_category: ConditionCategory, // General category
+    current_epoch: u64,                  // Prevent replay attacks
+    group_id: GroupID,                   // Which group they want to join
+    min_severity_level: u8               // Minimum severity for group (1-5)
+  ) -> Boolean {
+    
+    // Verify user meets minimum treatment duration requirement
+    assert(treatment_duration_months >= min_treatment_duration);
+    
+    // Verify severity level meets group requirements (without revealing exact level)
+    assert(severity_level >= min_severity_level);
+    assert(severity_level >= 1 && severity_level <= 5);
+    
+    // Verify condition matches group category (without revealing specific condition)
+    let category_from_hash = extract_category_from_hash(medical_condition_hash);
+    assert(category_from_hash == support_group_category);
+    
+    // Generate anonymous identity commitment
+    let identity_commitment = poseidon_hash([user_identity_secret, user_salt]);
+    
+    // Ensure user hasn't already joined this group (prevent sybil attacks)
+    assert(!group_memberships[group_id].contains(identity_commitment));
+    
+    // Verify epoch is recent (prevent replay attacks)
+    let current_time = get_current_timestamp();
+    assert(current_epoch >= current_time - 3600); // Within 1 hour
+    assert(current_epoch <= current_time + 300);  // Not more than 5 min future
+    
+    // Add user to group anonymously
+    group_memberships[group_id].insert(identity_commitment);
+    anonymous_commitments.insert(identity_commitment);
+    
+    // Update group stats
+    if (group_stats.contains_key(group_id)) {
+      let mut stats = group_stats[group_id];
+      stats.member_count += 1;
+      group_stats[group_id] = stats;
+    } else {
+      group_stats[group_id] = GroupStats {
+        member_count: 1,
+        avg_compatibility_score: 0,
+        activity_level: 1,
+        creation_timestamp: current_time
+      };
+    }
+    
+    // Update global stats (no personal info)
+    total_verified_members += 1;
+    
+    return true;
+  }
+  
+  // Circuit to calculate compatibility score without revealing preferences
+  circuit calculate_compatibility(
+    // Private inputs
+    user_preferences: CompatibilityVector,  // User's private preferences
+    user_availability_hash: Hash,           // Encrypted availability schedule
+    user_identity_secret: Field,            // For generating consistent anonymous ID
+    user_salt: Field,                       // Privacy salt
+    
+    // Public inputs
+    group_id: GroupID,
+    compatibility_threshold: u8,            // Minimum score to match (0-100)
+    current_epoch: u64
+  ) -> u8 {
+    
+    // Verify user is eligible to calculate compatibility
+    let identity_commitment = poseidon_hash([user_identity_secret, user_salt]);
+    
+    // Get group's aggregated preferences (computed from all members)
+    let group_prefs = get_group_aggregated_preferences(group_id);
+    
+    // Calculate compatibility scores using privacy-preserving methods
+    let interaction_score = calculate_interaction_compatibility(
+      user_preferences.interaction_style, 
+      group_prefs.avg_interaction_style
+    );
+    
+    let frequency_score = calculate_frequency_compatibility(
+      user_preferences.session_frequency,
+      group_prefs.avg_session_frequency
+    );
+    
+    let size_score = calculate_size_compatibility(
+      user_preferences.group_size_pref,
+      group_stats[group_id].member_count
+    );
+    
+    let experience_score = calculate_experience_compatibility(
+      user_preferences.experience_level,
+      group_prefs.avg_experience_level
+    );
+    
+    let availability_score = calculate_availability_compatibility(
+      user_availability_hash,
+      group_id
+    );
+    
+    // Weighted average calculation
+    let total_score = (
+      interaction_score * 25 +
+      frequency_score * 20 +
+      size_score * 15 +
+      experience_score * 20 +
+      availability_score * 20
+    ) / 100;
+    
+    // Only return score if above threshold
+    assert(total_score >= compatibility_threshold);
+    
+    // Update group's compatibility average
+    update_group_compatibility_average(group_id, total_score);
+    
+    return total_score;
+  }
+  
+  // Circuit for anonymous message verification in support groups
+  circuit verify_group_message(
+    // Private inputs
+    message_hash: Hash,                     // Hash of the message content
+    user_identity_secret: Field,            // User's identity secret
+    user_salt: Field,                       // Privacy salt
+    message_timestamp: u64,                 // When message was created
+    
+    // Public inputs
+    group_id: GroupID,
+    public_message_commitment: Hash,        // Public commitment to the message
+    current_epoch: u64
+  ) -> Boolean {
+    
+    // Verify user is a member of this group
+    let identity_commitment = poseidon_hash([user_identity_secret, user_salt]);
+    assert(group_memberships[group_id].contains(identity_commitment));
+    
+    // Verify message timestamp is recent
+    assert(message_timestamp >= current_epoch - 3600); // Within 1 hour
+    assert(message_timestamp <= current_epoch);
+    
+    // Verify message commitment matches
+    let expected_commitment = poseidon_hash([message_hash, identity_commitment, message_timestamp]);
+    assert(expected_commitment == public_message_commitment);
+    
+    return true;
+  }
+  
+  // Public function to get anonymous group statistics
+  function get_group_stats(group_id: GroupID) -> GroupStats {
+    if (group_stats.contains_key(group_id)) {
+      return group_stats[group_id];
+    } else {
+      return GroupStats {
+        member_count: 0,
+        avg_compatibility_score: 0,
+        activity_level: 0,
+        creation_timestamp: 0
+      };
+    }
+  }
+  
+  // Public function to get total platform statistics
+  function get_platform_stats() -> (u32, u16) {
+    return (total_verified_members, active_support_groups);
+  }
+  
+  // Helper functions for privacy-preserving calculations
+  function extract_category_from_hash(condition_hash: Hash) -> ConditionCategory {
+    // Extract category from hash without revealing specific condition
+    let hash_bytes = hash_to_bytes(condition_hash);
+    return (hash_bytes[0] % 5) + 1; // Maps to categories 1-5
+  }
+  
+  function calculate_interaction_compatibility(user_style: u8, group_avg: u8) -> u8 {
+    // Calculate compatibility score for interaction styles
+    let diff = if user_style > group_avg { user_style - group_avg } else { group_avg - user_style };
+    return if diff == 0 { 100 } else if diff == 1 { 75 } else { 50 };
+  }
+  
+  function calculate_frequency_compatibility(user_freq: u8, group_avg: u8) -> u8 {
+    // Calculate compatibility for session frequency preferences
+    let diff = if user_freq > group_avg { user_freq - group_avg } else { group_avg - user_freq };
+    return if diff == 0 { 100 } else if diff == 1 { 80 } else { 60 };
+  }
+  
+  function calculate_size_compatibility(user_pref: u8, current_size: u16) -> u8 {
+    // Calculate compatibility based on group size preference
+    let size_category = if current_size <= 5 { 1 } else if current_size <= 10 { 2 } else { 3 };
+    return if user_pref == size_category { 100 } else { 70 };
+  }
+  
+  function calculate_experience_compatibility(user_level: u8, group_avg: u8) -> u8 {
+    // Calculate experience level compatibility
+    let diff = if user_level > group_avg { user_level - group_avg } else { group_avg - user_level };
+    return if diff == 0 { 100 } else if diff == 1 { 85 } else { 70 };
+  }
+  
+  function calculate_availability_compatibility(user_hash: Hash, group_id: GroupID) -> u8 {
+    // Simplified availability compatibility (in real implementation, use more sophisticated matching)
+    // This would involve homomorphic encryption for time slot matching
+    return 80; // Placeholder - real implementation would calculate time overlap
+  }
+  
+  function get_group_aggregated_preferences(group_id: GroupID) -> CompatibilityVector {
+    // Return aggregated preferences for a group (computed from all members)
+    // This would be maintained as members join/leave
+    return CompatibilityVector {
+      interaction_style: 2,    // Average values
+      session_frequency: 1,
+      group_size_pref: 2,
+      time_flexibility: 3,
+      experience_level: 2
+    };
+  }
+  
+  function update_group_compatibility_average(group_id: GroupID, new_score: u8) {
+    // Update the group's average compatibility score
+    if (group_stats.contains_key(group_id)) {
+      let mut stats = group_stats[group_id];
+      // Simple moving average update
+      stats.avg_compatibility_score = (stats.avg_compatibility_score + new_score) / 2;
+      group_stats[group_id] = stats;
+    }
+  }
+  
+  function get_current_timestamp() -> u64 {
+    // Return current blockchain timestamp
+    return block_timestamp();
+  }
+  
+  function hash_to_bytes(hash: Hash) -> [u8; 32] {
+    // Convert hash to byte array for processing
+    return hash.to_bytes();
+  }
+}

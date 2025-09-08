@@ -1,0 +1,33 @@
+// Minimal Rate Limiting Nullifier (RLN) Circuit for Privacy First Challenge
+// Prevents spam while maintaining anonymity in chat messages
+
+circuit MinimalRLN {
+    // Private inputs
+    private field identity_secret;     // User's identity secret
+    private field message_hash;        // Hash of the message content
+    private field epoch;              // Time epoch for rate limiting
+    
+    // Public inputs
+    public field nullifier;           // Unique nullifier for this epoch
+    public field y;                   // Public signal for verification
+    public field root;                // Merkle root of member set
+    
+    // Circuit logic
+    fn main() {
+        // Generate nullifier for this epoch to prevent double-posting
+        let computed_nullifier = poseidon_hash([identity_secret, epoch]);
+        assert_eq(nullifier, computed_nullifier);
+        
+        // Generate public signal that can be used to detect spam
+        // If user posts twice in same epoch, their identity can be revealed
+        let computed_y = identity_secret + message_hash * epoch;
+        assert_eq(y, computed_y);
+        
+        // Verify membership in the group (simplified for minimal version)
+        let identity_commitment = poseidon_hash([identity_secret]);
+        
+        // In full implementation, this would verify Merkle proof
+        // For minimal version, we just ensure commitment is valid
+        assert(identity_commitment != 0);
+    }
+}
